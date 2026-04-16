@@ -1,0 +1,14 @@
+{
+  "name": "puppeteer-cluster-api",
+  "version": "1.0.0",
+  "description": "API Render HTML to Image",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^21.0.0",
+    "puppeteer-cluster": "^0.23.0"
+  }
+}
