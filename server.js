@@ -41,7 +41,9 @@ let cluster;
     console.log('✅ Hàng đợi Puppeteer đã sẵn sàng!');
 })();
 
-// Endpoint nhận lệnh
+// ============================================================
+// ENDPOINT 1 (CŨ - GIỮ NGUYÊN): Nhận html_base64 → Render PNG
+// ============================================================
 app.post('/api/convert', async (req, res) => {
     try {
         if (!cluster) {
@@ -58,6 +60,49 @@ app.post('/api/convert', async (req, res) => {
 
     } catch (error) {
         console.error("Lỗi Render:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ENDPOINT 2 (MỚI): Nhận URL → Mở trang → Chờ load → Chụp ảnh
+// Dùng cho trang ẩn #render-report/:customerId trên Frontend
+// ============================================================
+app.post('/api/screenshot', async (req, res) => {
+    try {
+        if (!cluster) {
+            return res.status(503).json({ error: 'Server đang khởi động trình duyệt...' });
+        }
+
+        const { url, width, height, wait_seconds } = req.body;
+        if (!url) return res.status(400).json({ error: 'Thiếu url' });
+
+        // Tạo task riêng cho chụp URL (khác với task html_base64)
+        const resultBase64 = await cluster.execute({ url, width, height, wait_seconds }, async ({ page, data }) => {
+            const { url, width, height, wait_seconds } = data;
+
+            await page.setViewport({ 
+                width: width || 1080, 
+                height: height || 1920, 
+                deviceScaleFactor: 2 
+            });
+
+            // Truy cập URL và đợi network im lặng (trang React load xong API)
+            await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+
+            // Đợi thêm vài giây cho React render hoàn tất (mặc định 3 giây)
+            const extraWait = (wait_seconds || 3) * 1000;
+            await new Promise(resolve => setTimeout(resolve, extraWait));
+
+            // Chụp ảnh
+            const imageBuffer = await page.screenshot({ type: 'jpeg', quality: 90 });
+            return imageBuffer.toString('base64');
+        });
+
+        res.status(200).json({ success: true, image_base64: resultBase64 });
+
+    } catch (error) {
+        console.error("Lỗi Screenshot:", error);
         res.status(500).json({ error: error.message });
     }
 });
