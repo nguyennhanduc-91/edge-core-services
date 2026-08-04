@@ -4,6 +4,12 @@ const { Cluster } = require('puppeteer-cluster');
 const app = express();
 // Tăng limit để nhận chuỗi base64 HTML dài
 app.use(express.json({ limit: '50mb' }));
+// ============================================================
+// ENDPOINT HEALTHCHECK (DÀNH CHO COOLIFY)
+// ============================================================
+app.get('/', (req, res) => {
+    res.status(200).send('OK');
+});
 
 let cluster;
 
