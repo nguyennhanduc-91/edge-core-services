@@ -1,6 +1,6 @@
 const express = require('express');
 const { Cluster } = require('puppeteer-cluster');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer'); // Quay lại dùng bản chuẩn
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -17,7 +17,7 @@ let cluster;
         maxConcurrency: 4,
         puppeteer,
         puppeteerOptions: {
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
+            // ĐÃ XÓA EXECUTABLEPATH: Để Puppeteer tự động dò đường dẫn động chuẩn xác nhất
             headless: 'new',
             args: [
                 '--no-sandbox',
