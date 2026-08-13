@@ -1,117 +1,92 @@
 const express = require('express');
 const { Cluster } = require('puppeteer-cluster');
+const puppeteer = require('puppeteer-core'); // TỐI ƯU 1: Dùng core để không tải lại Chrome
 
 const app = express();
-// Tăng limit để nhận chuỗi base64 HTML dài
-app.use(express.json({ limit: '50mb' }));
-// ============================================================
-// ENDPOINT HEALTHCHECK (DÀNH CHO COOLIFY)
-// ============================================================
+app.use(express.json({ limit: '50mb' })); // Giữ nguyên limit cho base64[cite: 2]
+
 app.get('/', (req, res) => {
-    res.status(200).send('OK');
+    res.status(200).send('OK'); // Giữ nguyên Healthcheck[cite: 2]
 });
 
 let cluster;
 
 (async () => {
-    // Khởi tạo hàng đợi Puppeteer
     cluster = await Cluster.launch({
-        concurrency: Cluster.CONCURRENCY_PAGE, // Mở tab mới, dùng chung 1 trình duyệt (Tiết kiệm RAM)
-        maxConcurrency: 4, // Số tab chạy song song. (4 tab là an toàn nhất cho VPS 4GB RAM)
+        concurrency: Cluster.CONCURRENCY_PAGE, // Tiết kiệm RAM[cite: 2]
+        maxConcurrency: 4, // 4 tab an toàn cho VPS[cite: 2]
+        puppeteer,         // Gắn Puppeteer Core
         puppeteerOptions: {
-            headless: 'new',
+            executablePath: '/usr/bin/google-chrome-stable', // TỐI ƯU 2: Trỏ thẳng vào Chrome của base image
+            headless: 'new', // Khuyên dùng cho bản mới[cite: 2]
             args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage' // Chống crash RAM trên môi trường Docker
+                '--no-sandbox',[cite: 2]
+                '--disable-setuid-sandbox',[cite: 2]
+                '--disable-dev-shm-usage', // Chống crash RAM[cite: 2]
+                '--disable-gpu',           // TỐI ƯU 3: Giảm tải vì VPS không có card đồ họa
+                '--no-zygote',             // TỐI ƯU 4: Chặn các process con không cần thiết rò rỉ RAM
+                '--single-process'         // TỐI ƯU 5: Chạy nhẹ nhàng trong 1 process trên Docker
             ]
         }
     });
 
-    // Định nghĩa công việc (Task)
     cluster.task(async ({ page, data }) => {
-        const { html_base64, width, height } = data;
-        const htmlContent = Buffer.from(html_base64, 'base64').toString('utf-8');
+        const { html_base64, width, height } = data;[cite: 2]
+        const htmlContent = Buffer.from(html_base64, 'base64').toString('utf-8');[cite: 2]
         
-        // deviceScaleFactor: 2 giúp hình khối và chữ sắc nét (Retina)
-        await page.setViewport({ width: width || 1080, height: height || 1920, deviceScaleFactor: 2 });
+        await page.setViewport({ width: width || 1080, height: height || 1920, deviceScaleFactor: 2 });[cite: 2]
+        await page.setContent(htmlContent, { waitUntil: 'networkidle0', timeout: 30000 });[cite: 2]
         
-        // Chờ tải xong Tailwind và Font Google
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0', timeout: 30000 });
-        
-        // Chụp ảnh
-        const imageBuffer = await page.screenshot({ type: 'jpeg', quality: 90 });
-        return imageBuffer.toString('base64');
+        const imageBuffer = await page.screenshot({ type: 'jpeg', quality: 90 });[cite: 2]
+        return imageBuffer.toString('base64');[cite: 2]
     });
 
-    console.log('✅ Hàng đợi Puppeteer đã sẵn sàng!');
+    console.log('✅ Hàng đợi Puppeteer đã sẵn sàng!');[cite: 2]
 })();
 
-// ============================================================
-// ENDPOINT 1 (CŨ - GIỮ NGUYÊN): Nhận html_base64 → Render PNG
-// ============================================================
 app.post('/api/convert', async (req, res) => {
     try {
         if (!cluster) {
-            return res.status(503).json({ error: 'Server đang khởi động trình duyệt...' });
+            return res.status(503).json({ error: 'Server đang khởi động trình duyệt...' });[cite: 2]
         }
+        const { html_base64, width, height } = req.body;[cite: 2]
+        if (!html_base64) return res.status(400).json({ error: 'Thiếu html_base64' });[cite: 2]
 
-        const { html_base64, width, height } = req.body;
-        if (!html_base64) return res.status(400).json({ error: 'Thiếu html_base64' });
-
-        // Ném yêu cầu vào hàng đợi và chờ lấy kết quả
-        const resultBase64 = await cluster.execute({ html_base64, width, height });
-        
-        res.status(200).json({ success: true, image_base64: resultBase64 });
-
+        const resultBase64 = await cluster.execute({ html_base64, width, height });[cite: 2]
+        res.status(200).json({ success: true, image_base64: resultBase64 });[cite: 2]
     } catch (error) {
-        console.error("Lỗi Render:", error);
-        res.status(500).json({ error: error.message });
+        console.error("Lỗi Render:", error);[cite: 2]
+        res.status(500).json({ error: error.message });[cite: 2]
     }
 });
 
-// ============================================================
-// ENDPOINT 2 (MỚI): Nhận URL → Mở trang → Chờ load → Chụp ảnh
-// Dùng cho trang ẩn #render-report/:customerId trên Frontend
-// ============================================================
 app.post('/api/screenshot', async (req, res) => {
     try {
         if (!cluster) {
-            return res.status(503).json({ error: 'Server đang khởi động trình duyệt...' });
+            return res.status(503).json({ error: 'Server đang khởi động trình duyệt...' });[cite: 2]
         }
+        const { url, width, height, wait_seconds } = req.body;[cite: 2]
+        if (!url) return res.status(400).json({ error: 'Thiếu url' });[cite: 2]
 
-        const { url, width, height, wait_seconds } = req.body;
-        if (!url) return res.status(400).json({ error: 'Thiếu url' });
-
-        // Tạo task riêng cho chụp URL (khác với task html_base64)
         const resultBase64 = await cluster.execute({ url, width, height, wait_seconds }, async ({ page, data }) => {
-            const { url, width, height, wait_seconds } = data;
+            const { url, width, height, wait_seconds } = data;[cite: 2]
 
-            await page.setViewport({ 
-                width: width || 1080, 
-                height: height || 1920, 
-                deviceScaleFactor: 2 
-            });
+            await page.setViewport({ width: width || 1080, height: height || 1920, deviceScaleFactor: 2 });[cite: 2]
+            await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });[cite: 2]
 
-            // Truy cập URL và đợi network im lặng (trang React load xong API)
-            await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+            const extraWait = (wait_seconds || 3) * 1000;[cite: 2]
+            await new Promise(resolve => setTimeout(resolve, extraWait));[cite: 2]
 
-            // Đợi thêm vài giây cho React render hoàn tất (mặc định 3 giây)
-            const extraWait = (wait_seconds || 3) * 1000;
-            await new Promise(resolve => setTimeout(resolve, extraWait));
-
-            // Chụp ảnh
-            const imageBuffer = await page.screenshot({ type: 'jpeg', quality: 90 });
-            return imageBuffer.toString('base64');
+            const imageBuffer = await page.screenshot({ type: 'jpeg', quality: 90 });[cite: 2]
+            return imageBuffer.toString('base64');[cite: 2]
         });
 
-        res.status(200).json({ success: true, image_base64: resultBase64 });
-
+        res.status(200).json({ success: true, image_base64: resultBase64 });[cite: 2]
     } catch (error) {
-        console.error("Lỗi Screenshot:", error);
-        res.status(500).json({ error: error.message });
+        console.error("Lỗi Screenshot:", error);[cite: 2]
+        res.status(500).json({ error: error.message });[cite: 2]
     }
 });
 
-const PORT = 3000;
-app.listen(PORT, () => console.log(`🚀 API chạy tại port ${PORT}`));
+const PORT = 3000;[cite: 2]
+app.listen(PORT, () => console.log(`🚀 API chạy tại port ${PORT}`));[cite: 2]
