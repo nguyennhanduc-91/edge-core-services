@@ -17,7 +17,7 @@ let cluster;
         maxConcurrency: 4,
         puppeteer,
         puppeteerOptions: {
-            executablePath: '/usr/bin/google-chrome-stable',
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
             headless: 'new',
             args: [
                 '--no-sandbox',
