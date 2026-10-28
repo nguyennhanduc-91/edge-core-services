@@ -3,7 +3,7 @@ FROM ghcr.io/puppeteer/puppeteer:latest
 
 USER root
 
-# Cài đặt curl để hỗ trợ Coolify / Docker Healthcheck
+# Cài đặt curl để hỗ trợ Coolify Healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -12,14 +12,15 @@ RUN echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
 WORKDIR /usr/src/app
 
-# Copy file cấu hình và cài đặt dependencies
-COPY package*.json ./
+# Copy cấu hình package và puppeteer
+COPY package*.json .puppeteerrc.cjs ./
 RUN npm install --only=production
+RUN npx puppeteer browsers install chrome
 
 # Copy toàn bộ mã nguồn
 COPY . .
 
-# Chuyển quyền cho pptruser để bảo mật
+# Chuyển quyền thư mục app (bao gồm cả .cache/puppeteer) cho pptruser
 RUN chown -R pptruser:pptruser /usr/src/app
 USER pptruser
 

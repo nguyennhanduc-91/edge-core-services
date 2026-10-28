@@ -26,7 +26,6 @@ app.get('/', (req, res) => {
             timeout: 60000, // Timeout 60s cho mỗi task
             puppeteerOptions: {
                 headless: true, // Puppeteer v24+ dùng boolean true
-                ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}),
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -44,6 +43,22 @@ app.get('/', (req, res) => {
         console.error('❌ Lỗi khởi tạo Puppeteer Cluster:', err);
     }
 })();
+
+// Hướng dẫn nếu người dùng gọi GET vào endpoint screenshot
+app.get('/api/screenshot', (req, res) => {
+    res.status(405).json({
+        error: 'Method Not Allowed',
+        message: 'Endpoint này chỉ hỗ trợ method POST. Vui lòng gửi POST request với JSON body: { "url": "https://...", "width": 1080, "height": 1920, "wait_seconds": 3 }'
+    });
+});
+
+// Hướng dẫn nếu người dùng gọi GET vào endpoint convert
+app.get('/api/convert', (req, res) => {
+    res.status(405).json({
+        error: 'Method Not Allowed',
+        message: 'Endpoint này chỉ hỗ trợ method POST. Vui lòng gửi POST request với JSON body: { "html_base64": "...", "width": 1080, "height": 1920 }'
+    });
+});
 
 // API: Render mã nguồn HTML Base64 thành ảnh
 app.post('/api/convert', async (req, res) => {
