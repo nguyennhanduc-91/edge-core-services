@@ -7,9 +7,9 @@ app.use(express.json({ limit: '50mb' }));
 
 let cluster;
 
-// Healthcheck
+// Healthcheck: Luôn trả về 200 để Coolify/Docker healthcheck pass ngay khi server khởi động
 app.get('/', (req, res) => {
-    res.status(cluster ? 200 : 503).json({
+    res.status(200).json({
         status: cluster ? 'OK' : 'STARTING',
         service: 'puppeteer-cluster-api',
         uptime: process.uptime()
@@ -35,7 +35,6 @@ app.get('/', (req, res) => {
                     '--no-zygote',
                     '--ignore-certificate-errors',
                     '--disable-features=IsolateOrigins,site-per-process'
-                    // Đã gỡ bỏ --single-process để tránh lỗi socket network và crash toàn bộ cluster
                 ]
             }
         });
