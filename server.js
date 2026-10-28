@@ -3,6 +3,10 @@ const { Cluster } = require('puppeteer-cluster');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const dns = require('dns');
+const { Resolver } = require('dns').promises;
+
+// Ưu tiên IPv4 cho toàn bộ Node.js
+dns.setDefaultResultOrder('ipv4first');
 
 // Polyfill tương thích ngược cho puppeteer-cluster trên Puppeteer v22+
 if (puppeteer.Browser && !puppeteer.Browser.prototype.createIncognitoBrowserContext) {
@@ -24,43 +28,20 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection:', reason);
 });
 
-// Chẩn đoán mạng lúc khởi động
-(async () => {
-    console.log('--- 🩺 BẮT ĐẦU CHẨN ĐOÁN MÔI TRƯỜNG MẠNG ---');
+// Hàm lấy IP thật từ Public DNS (1.1.1.1 / 8.8.8.8) để vượt qua lỗi DNS nội bộ bị ép về 127.0.0.1
+async function getPublicIp(hostname) {
     try {
-        if (fs.existsSync('/etc/hosts')) {
-            console.log('📄 [File /etc/hosts]:\n' + fs.readFileSync('/etc/hosts', 'utf8').trim());
+        const resolver = new Resolver();
+        resolver.setServers(['1.1.1.1', '8.8.8.8']);
+        const ips = await resolver.resolve4(hostname);
+        if (ips && ips.length > 0) {
+            return ips[0];
         }
-        if (fs.existsSync('/etc/resolv.conf')) {
-            console.log('📄 [File /etc/resolv.conf]:\n' + fs.readFileSync('/etc/resolv.conf', 'utf8').trim());
-        }
     } catch (e) {
-        console.error('Lỗi đọc file cấu hình mạng:', e.message);
+        console.warn(`⚠️ Không thể resolve ${hostname} qua 1.1.1.1:`, e.message);
     }
-
-    // Kiểm tra DNS của hub.thanhnguyen.group
-    dns.lookup('hub.thanhnguyen.group', { all: true }, (err, addresses) => {
-        if (err) console.error('❌ DNS lookup hub.thanhnguyen.group lỗi:', err.message);
-        else console.log('🔍 DNS lookup hub.thanhnguyen.group:', JSON.stringify(addresses));
-    });
-
-    // Kiểm tra kết nối ra Internet công cộng
-    try {
-        const testGoogle = await fetch('https://www.google.com', { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-        console.log('🌐 Kết nối Internet ngoài (Google): OK (HTTP ' + testGoogle.status + ')');
-    } catch (e) {
-        console.error('❌ Không thể kết nối ra Internet ngoài (Google):', e.message);
-    }
-
-    // Kiểm tra kết nối trực tiếp tới hub.thanhnguyen.group từ Node.js
-    try {
-        const testHub = await fetch('https://hub.thanhnguyen.group', { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-        console.log('🌐 Kết nối tới hub.thanhnguyen.group từ Node.js: OK (HTTP ' + testHub.status + ')');
-    } catch (e) {
-        console.error('❌ Kết nối tới hub.thanhnguyen.group từ Node.js bị từ chối/lỗi:', e.message);
-    }
-    console.log('--- 🩺 KẾT THÚC CHẨN ĐOÁN MÔI TRƯỜNG MẠNG ---');
-})();
+    return null;
+}
 
 // Healthcheck: Luôn trả về 200 để Coolify/Docker healthcheck pass ngay khi server khởi động
 app.get('/', (req, res) => {
@@ -74,6 +55,13 @@ app.get('/', (req, res) => {
 // Khởi tạo cluster
 (async () => {
     try {
+        // Truy vấn IP Cloudflare thật của hub.thanhnguyen.group để bypass 127.0.0.1
+        let hubIp = await getPublicIp('hub.thanhnguyen.group');
+        if (!hubIp) {
+            hubIp = '104.21.8.192'; // IP Cloudflare dự phòng
+        }
+        console.log(`🌐 [DNS Fix] hub.thanhnguyen.group được định tuyến trực tiếp tới IP Cloudflare: ${hubIp}`);
+
         const chromeArgs = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -81,13 +69,15 @@ app.get('/', (req, res) => {
             '--disable-gpu',
             '--no-zygote',
             '--ignore-certificate-errors',
-            '--disable-features=IsolateOrigins,site-per-process,AsyncDns'
+            '--disable-features=IsolateOrigins,site-per-process,AsyncDns',
+            // Ép Chromium kết nối thẳng tới IP Cloudflare thật, bỏ qua DNS 127.0.0.1 bị override
+            `--host-resolver-rules=MAP hub.thanhnguyen.group ${hubIp}, MAP *.thanhnguyen.group ${hubIp}`
         ];
 
-        // Nếu có cấu hình mapping host tùy chọn
+        // Nếu có cấu hình HOST_RESOLVER_RULES tùy chọn từ biến môi trường
         if (process.env.HOST_RESOLVER_RULES) {
             chromeArgs.push(`--host-resolver-rules=${process.env.HOST_RESOLVER_RULES}`);
-            console.log(`⚙️ Sử dụng HOST_RESOLVER_RULES: ${process.env.HOST_RESOLVER_RULES}`);
+            console.log(`⚙️ Sử dụng HOST_RESOLVER_RULES tùy chỉnh: ${process.env.HOST_RESOLVER_RULES}`);
         }
 
         cluster = await Cluster.launch({
@@ -166,15 +156,6 @@ app.post('/api/screenshot', async (req, res) => {
 
         console.log(`📸 [Screenshot Request] Nhận yêu cầu chụp URL: ${url}`);
 
-        // Chẩn đoán nhanh kết nối cho request này
-        try {
-            const parsed = new URL(url);
-            const dnsInfo = await dns.promises.lookup(parsed.hostname, { all: true });
-            console.log(`🔍 [Request DNS] ${parsed.hostname} ->`, JSON.stringify(dnsInfo));
-        } catch (e) {
-            console.warn(`⚠️ [Request DNS Warning]:`, e.message);
-        }
-
         const resultBase64 = await cluster.execute({ url, width, height, wait_seconds }, async ({ page, data }) => {
             const { url, width, height, wait_seconds } = data;
 
@@ -187,7 +168,7 @@ app.post('/api/screenshot', async (req, res) => {
                 deviceScaleFactor: 2
             });
 
-            // Thử load trang với networkidle2
+            // networkidle2 phù hợp và ổn định cho các Single Page Application (React/Vue/Angular với hash routing #)
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
             const extraWait = (parseInt(wait_seconds, 10) || 3) * 1000;
