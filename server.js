@@ -1,6 +1,8 @@
 const express = require('express');
 const { Cluster } = require('puppeteer-cluster');
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const dns = require('dns');
 
 // Polyfill tương thích ngược cho puppeteer-cluster trên Puppeteer v22+
 if (puppeteer.Browser && !puppeteer.Browser.prototype.createIncognitoBrowserContext) {
@@ -22,6 +24,44 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection:', reason);
 });
 
+// Chẩn đoán mạng lúc khởi động
+(async () => {
+    console.log('--- 🩺 BẮT ĐẦU CHẨN ĐOÁN MÔI TRƯỜNG MẠNG ---');
+    try {
+        if (fs.existsSync('/etc/hosts')) {
+            console.log('📄 [File /etc/hosts]:\n' + fs.readFileSync('/etc/hosts', 'utf8').trim());
+        }
+        if (fs.existsSync('/etc/resolv.conf')) {
+            console.log('📄 [File /etc/resolv.conf]:\n' + fs.readFileSync('/etc/resolv.conf', 'utf8').trim());
+        }
+    } catch (e) {
+        console.error('Lỗi đọc file cấu hình mạng:', e.message);
+    }
+
+    // Kiểm tra DNS của hub.thanhnguyen.group
+    dns.lookup('hub.thanhnguyen.group', { all: true }, (err, addresses) => {
+        if (err) console.error('❌ DNS lookup hub.thanhnguyen.group lỗi:', err.message);
+        else console.log('🔍 DNS lookup hub.thanhnguyen.group:', JSON.stringify(addresses));
+    });
+
+    // Kiểm tra kết nối ra Internet công cộng
+    try {
+        const testGoogle = await fetch('https://www.google.com', { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+        console.log('🌐 Kết nối Internet ngoài (Google): OK (HTTP ' + testGoogle.status + ')');
+    } catch (e) {
+        console.error('❌ Không thể kết nối ra Internet ngoài (Google):', e.message);
+    }
+
+    // Kiểm tra kết nối trực tiếp tới hub.thanhnguyen.group từ Node.js
+    try {
+        const testHub = await fetch('https://hub.thanhnguyen.group', { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+        console.log('🌐 Kết nối tới hub.thanhnguyen.group từ Node.js: OK (HTTP ' + testHub.status + ')');
+    } catch (e) {
+        console.error('❌ Kết nối tới hub.thanhnguyen.group từ Node.js bị từ chối/lỗi:', e.message);
+    }
+    console.log('--- 🩺 KẾT THÚC CHẨN ĐOÁN MÔI TRƯỜNG MẠNG ---');
+})();
+
 // Healthcheck: Luôn trả về 200 để Coolify/Docker healthcheck pass ngay khi server khởi động
 app.get('/', (req, res) => {
     res.status(200).json({
@@ -34,22 +74,30 @@ app.get('/', (req, res) => {
 // Khởi tạo cluster
 (async () => {
     try {
+        const chromeArgs = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-zygote',
+            '--ignore-certificate-errors',
+            '--disable-features=IsolateOrigins,site-per-process,AsyncDns'
+        ];
+
+        // Nếu có cấu hình mapping host tùy chọn
+        if (process.env.HOST_RESOLVER_RULES) {
+            chromeArgs.push(`--host-resolver-rules=${process.env.HOST_RESOLVER_RULES}`);
+            console.log(`⚙️ Sử dụng HOST_RESOLVER_RULES: ${process.env.HOST_RESOLVER_RULES}`);
+        }
+
         cluster = await Cluster.launch({
-            concurrency: Cluster.CONCURRENCY_PAGE, // Dùng CONCURRENCY_PAGE để tương thích chuẩn với Puppeteer v24+
+            concurrency: Cluster.CONCURRENCY_PAGE,
             maxConcurrency: parseInt(process.env.MAX_CONCURRENCY, 10) || 4,
             puppeteer,
-            timeout: 60000, // Timeout 60s cho mỗi task
+            timeout: 60000,
             puppeteerOptions: {
-                headless: true, // Puppeteer v24+ dùng boolean true
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--no-zygote',
-                    '--ignore-certificate-errors',
-                    '--disable-features=IsolateOrigins,site-per-process'
-                ]
+                headless: true,
+                args: chromeArgs
             }
         });
 
@@ -116,6 +164,17 @@ app.post('/api/screenshot', async (req, res) => {
         const { url, width, height, wait_seconds } = req.body;
         if (!url) return res.status(400).json({ error: 'Thiếu url' });
 
+        console.log(`📸 [Screenshot Request] Nhận yêu cầu chụp URL: ${url}`);
+
+        // Chẩn đoán nhanh kết nối cho request này
+        try {
+            const parsed = new URL(url);
+            const dnsInfo = await dns.promises.lookup(parsed.hostname, { all: true });
+            console.log(`🔍 [Request DNS] ${parsed.hostname} ->`, JSON.stringify(dnsInfo));
+        } catch (e) {
+            console.warn(`⚠️ [Request DNS Warning]:`, e.message);
+        }
+
         const resultBase64 = await cluster.execute({ url, width, height, wait_seconds }, async ({ page, data }) => {
             const { url, width, height, wait_seconds } = data;
 
@@ -128,7 +187,7 @@ app.post('/api/screenshot', async (req, res) => {
                 deviceScaleFactor: 2
             });
 
-            // networkidle2 phù hợp và ổn định cho các Single Page Application (React/Vue/Angular với hash routing #)
+            // Thử load trang với networkidle2
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
             const extraWait = (parseInt(wait_seconds, 10) || 3) * 1000;
