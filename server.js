@@ -2,10 +2,25 @@ const express = require('express');
 const { Cluster } = require('puppeteer-cluster');
 const puppeteer = require('puppeteer');
 
+// Polyfill tương thích ngược cho puppeteer-cluster trên Puppeteer v22+
+if (puppeteer.Browser && !puppeteer.Browser.prototype.createIncognitoBrowserContext) {
+    puppeteer.Browser.prototype.createIncognitoBrowserContext = function() {
+        return this.createBrowserContext();
+    };
+}
+
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 let cluster;
+
+// Bắt lỗi không mong muốn để không làm crash Node.js process (tránh lỗi 502 Bad Gateway)
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection:', reason);
+});
 
 // Healthcheck: Luôn trả về 200 để Coolify/Docker healthcheck pass ngay khi server khởi động
 app.get('/', (req, res) => {
@@ -20,7 +35,7 @@ app.get('/', (req, res) => {
 (async () => {
     try {
         cluster = await Cluster.launch({
-            concurrency: Cluster.CONCURRENCY_CONTEXT, // Mỗi task chạy trên incognito context riêng biệt
+            concurrency: Cluster.CONCURRENCY_PAGE, // Dùng CONCURRENCY_PAGE để tương thích chuẩn với Puppeteer v24+
             maxConcurrency: parseInt(process.env.MAX_CONCURRENCY, 10) || 4,
             puppeteer,
             timeout: 60000, // Timeout 60s cho mỗi task
